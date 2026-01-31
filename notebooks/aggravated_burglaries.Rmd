@@ -1,0 +1,151 @@
+---
+title: "aggravated_burglaries"
+output: html_document
+---
+
+*Analyzing Aggravated Burglaries in Davidson County*
+
+```{r}
+library(sf)
+library(tidyverse)
+```
+
+
+# Part 1: Data Preparation
+
+You've been provided three datasets for this project:
+* burglaries_2023.csv: Contains data on the aggravated burglary incidents in Davidson County. This was obtained from https://data.nashville.gov/Police/Metro-Nashville-Police-Department-Incidents/2u6v-ujjs.
+* census.csv: Census tract level data on population and median income. This was obtained from the US Census American Community Survey.
+* DC: A shapefile containing Davidson County census tracts
+
+## Read in data
+```{r}
+burglaries_2023 <- read_csv(file = "../data/burglaries_2023.csv")
+
+burglaries_2023 |> head(5)
+```
+
+```{r}
+census <- read_csv(file = "../data/census.csv")
+
+census |> head(5)
+```
+
+```{r}
+DC <- st_read("../data/DC")
+
+DC |> head(5)
+```
+
+## Perform a spatial join to determine the census tract in which each burglary occurred. Hint: You may want to make use of the [st_as_sf function](https://r-spatial.github.io/sf/reference/st_as_sf.html) in order to convert the burglaries data into an sf object.
+
+## Convert burglaries_2023 to a sf object
+```{r}
+burglaries_2023_sf <-burglaries_2023 |>
+  drop_na(longitude) |>
+  drop_na(latitude) |> 
+  st_as_sf(
+    coords = c("longitude", "latitude"),
+    crs = st_crs(DC),
+    remove = FALSE
+  )
+
+burglaries_2023_sf
+```
+
+## Join burglaries that are within census
+```{r}
+burglaries_census_geo_sf <- st_join(
+  x = burglaries_2023_sf,
+  y = DC,
+  join = st_within,
+  left = FALSE
+)
+
+burglaries_census_geo_sf
+```
+
+## After performing the spatial join, merge in the census data. **Note:** Make sure that the final dataset contains all census tracts, even those with zero burglaries.
+```{r}
+burglaries_census_sf <- merge(
+  x = burglaries_census_geo_sf,
+  y = census,
+  by.x = c("STATEFP", "COUNTYFP", "TRACTCE"),
+  by.y = c(as.character("state"), "county", "tract"),
+  all = TRUE
+)
+
+burglaries_census_sf
+```
+
+## Replace incident numbers NaN with zero
+```{r}
+burglaries_census_sf <- burglaries_census_sf |> 
+  mutate(incident_number = replace_na(incident_number, 0))
+```
+
+## Verify 
+```{r}
+burglaries_census_sf |> 
+  filter(incident_number == 0)
+```
+
+
+# Part 2: Exploratory Analysis
+
+Perform some exploratory analysis on your prepared dataset.
+
+Aggregate the data by census tract. **Warning:** each incident can appear multiple times if there are multiple victims, so be sure that you aren't double-counting any incidents. 
+
+## Get the count of unique census tracts
+```{r}
+burglaries_census_sf |> 
+  distinct(TRACTCE) |> 
+  count()
+```
+
+## Get count of unique incidences by census tract. Reconcile number of census tracts.
+```{r}
+incidents_per_tract <- burglaries_census_sf |> 
+    group_by(TRACTCE) |> 
+    distinct(incident_number) |>
+    count(sort = TRUE, name = "INCIDENTS")
+
+incidents_per_tract
+```
+
+## Which census tract had the highest number of burglaries?
+
+```{r}
+incidents_per_tract |> 
+    head(n = 1)
+```
+
+## Which census tract had the highest number of burglaries per 1000 residents?
+```{r}
+burglaries_census_sf |> 
+    mutate(KPOP = population / 1000, .after = population) |> 
+    group_by(TRACTCE) |> 
+    distinct(KPOP) |> 
+    merge(incidents_per_tract, by = "TRACTCE") |> 
+    filter(KPOP > 0) |> 
+    mutate(INC_PER_KPOP = INCIDENTS / KPOP) |> 
+    arrange(desc(INC_PER_KPOP)) |> 
+    head(1)
+```
+
+
+We're interested in the relationship between median income and number of aggravated burglaries, so examine those variables on their own and together to see what you can find. You may want to perform additional calculations, create plots, etc.
+
+### Part 3: Statistical Modeling
+
+Fit a Poisson regression model with target variable the rate of burglaries per census tract and with predictor the median income. Offset using the log of the population so that we are looking at the rate of burglaries per population instead of the number of burglaries. How can you interpret the meaning of the output? How do the estimates from the model compare to the observed data?
+
+Additional Resources for Generalized Linear Models:
+* [Generalized Linear Models in R](https://app.datacamp.com/learn/courses/generalized-linear-models-in-r), a DataCamp course
+* [Beyond Multiple Linear Regression, Chapter 4](https://bookdown.org/roback/bookdown-BeyondMLR/ch-poissonreg.html)
+
+### Bonus: APIs in R
+
+The data that you used for this project can be obtained through [the Nashville Open Data Portal](https://datanashvillegov-nashville.hub.arcgis.com/datasets/d747436243e9439e968fce056545016a_0/explore?location=36.185326%2C-86.784950%2C9.92) and through the [US Census 2020 American Community Survey API](https://www.census.gov/data/developers/data-sets/acs-5year.html). Utilize these APIs to retrieve the data used in this project (and any other data that you want to incorporate into your analysis). Hints: First, make sure to check out the [API Docs](https://datanashvillegov-nashville.hub.arcgis.com/datasets/d747436243e9439e968fce056545016a_0/api) for the Nashville Open Data API. When using the Census API, population, B01001_001E, is contained in the detailed tables and median income, S1901_C01_012E, is contained in the subject tables. Tennessee's FIPS code is 47 and Davidson County's FIPS code is 37. 
+

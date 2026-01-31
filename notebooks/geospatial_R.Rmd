@@ -4,8 +4,8 @@ output: html_notebook
 ---
 
 ```{r}
-#install.packages("sf")
-#install.packages("leaflet")
+# install.packages("sf")
+# install.packages("leaflet")
 library(sf)
 library(tidyverse)
 ```
@@ -49,6 +49,8 @@ bus_stops <- bus_stops |>
     latitude = as.numeric(str_extract(`Mapped Location`, "\\((.+),", group = 1)),
     longitude = as.numeric(str_extract(`Mapped Location`, ",(.+)\\)", group = 1))
     )
+
+bus_stops |> head(5)
 ```
 
 Now, we can plot these bus stops. Note that I'll start with the zipcodes plot and then add in the bus stops by using geom_point.
@@ -112,10 +114,6 @@ zipcodes |>
 ```
 
 Finally, if we want to make an interactive map, we can use the leaflet library (https://rstudio.github.io/leaflet/).
-```{r}
-library(leaflet)
-```
-
 ```{r}
 leaflet(data = bus_stops |> 
           drop_na(latitude) |> 

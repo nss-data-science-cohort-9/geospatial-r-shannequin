@@ -1,0 +1,252 @@
+---
+title: "Geospatial Poisson"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(sf)
+```
+
+```{r}
+burglaries <- read_csv("../data/burglaries_2023.csv")
+```
+
+```{r}
+burglaries <- burglaries %>% 
+  distinct(incident_number, .keep_all = TRUE) %>% 
+  drop_na(latitude) %>% 
+  select(incident_number, latitude, longitude)
+```
+
+```{r}
+census <- read_csv("../data/census.csv")
+```
+
+```{r}
+tracts <- st_read("../data/DC")
+```
+
+Convert burglaries to an sf object. 
+```{r}
+burglaries_sf <- st_as_sf(
+  burglaries |> drop_na(latitude), 
+  coords = c("longitude", "latitude"), 
+  crs = st_crs(tracts)
+  )
+```
+
+```{r}
+st_filter(burglaries_sf, tracts)
+```
+
+
+Then do a spatial join and drop the geometry.
+```{r}
+burglaries_tracts <- st_join(tracts, burglaries_sf, join = st_contains) %>% 
+  st_drop_geometry()
+
+burglaries_tracts
+```
+
+```{r}
+burglaries_tracts |> 
+  filter(is.na(incident_number))
+```
+
+```{r}
+census
+```
+
+
+```{r}
+burglaries_tracts <- burglaries_tracts %>% 
+  group_by(TRACTCE) %>% 
+  summarize(num_burglaries = n_distinct(incident_number, na.rm = TRUE)) |> 
+  arrange(desc(num_burglaries)) %>% 
+  rename(tract = TRACTCE) %>% 
+  right_join(census)
+
+burglaries_tracts
+```
+
+
+Look at the distributions by tract.
+
+```{r}
+burglaries_tracts |> 
+  ggplot(aes(x = population)) +
+  geom_histogram()
+```
+
+
+```{r}
+burglaries_tracts |> 
+  ggplot(aes(x = median_income)) +
+  geom_histogram()
+```
+
+```{r}
+burglaries_tracts |> 
+  arrange(population)
+```
+
+
+There are some tracts with a median income number of -large number. Let's drop those.
+```{r}
+burglaries_tracts <- burglaries_tracts %>% 
+  filter(population > 0, median_income > 0)
+```
+
+```{r}
+burglaries_tracts |> 
+  ggplot(aes(x = median_income)) +
+  geom_histogram()
+```
+
+```{r}
+burglaries_tracts |> 
+  ggplot(aes(x = num_burglaries)) +
+  geom_histogram()
+```
+Then the relationship between the two:
+
+```{r}
+burglaries_tracts %>% 
+  ggplot(aes(x = median_income, y = num_burglaries)) +
+  geom_point()
+```
+
+And on a per thousand population basis.
+
+```{r}
+burglaries_tracts %>% 
+  mutate(burglaries_per_thousand = num_burglaries * 1000 / population) |> 
+  ggplot(aes(x = median_income, y = burglaries_per_thousand)) +
+  geom_point()
+```
+
+
+### Models
+
+```{r}
+burg_poisson <- glm(num_burglaries ~ median_income, 
+                    family = poisson, 
+                    data = burglaries_tracts,
+                    offset = log(population))
+
+summary(burg_poisson)
+```
+
+```{r}
+burg_poisson |> 
+  coef() * 1000
+```
+
+
+```{r}
+predict(burg_poisson)
+```
+
+
+```{r}
+yi <- burglaries_tracts$num_burglaries
+
+pops <- burglaries_tracts$population
+
+mi <- burglaries_tracts$median_income
+
+burg_poisson$coefficients['(Intercept)'] + burg_poisson$coefficients['median_income']*mi + log(pops)
+
+sum(yi*predict(burg_poisson)) - sum(exp(predict(burg_poisson))) - sum(log(yi!))
+```
+
+
+```{r}
+population = 5000
+
+exp(-5.184 + log(population) + 40000 * -2.434e-05)
+```
+
+
+```{r}
+median_income <- seq(from = 20000, to = 180000, length.out = 5)
+population = 4000
+
+map(median_income, 
+    \(x) tibble(median_income = x, 
+                num_burglaries = 0:20, 
+                probability = dpois(0:20, 
+                                      lambda = predict(burg_poisson,
+                                                   newdata = tibble(median_income = x, population = population), type = "response")
+                                    )
+                )
+    ) |> 
+  bind_rows() |> 
+  ggplot(aes(x = num_burglaries, y = probability)) +
+  geom_col() +
+  facet_wrap(~median_income)
+```
+
+
+```{r}
+library(AER)
+
+dispersiontest(burg_poisson)
+```
+
+Extra: What about overdispersion? (That is, does the response really follow a Poisson distribution?)
+
+What could go wrong? If the model has overdispersion, our standard errors will be too small, which increases the chances of a Type I error.
+
+A good explanation is available in [this video](https://www.youtube.com/watch?v=uGKnoAw-PFQ). 
+```{r}
+burg_quasipoisson <- glm(num_burglaries ~ median_income + offset(log(population)), 
+                    family = quasipoisson, 
+                    data = burglaries_tracts)
+
+summary(burg_quasipoisson)
+```
+
+```{r}
+library(MASS)
+
+burg_nb <- glm.nb(num_burglaries ~ median_income + offset(log(population)),
+                    data = burglaries_tracts)
+
+summary(burg_nb)
+```
+
+
+```{r}
+burg_nb$theta
+```
+
+
+```{r}
+median_income <- seq(from = 20000, to = 180000, length.out = 5)
+population = 4000
+
+mu <- predict(burg_nb, 
+              newdata = tibble(median_income = median_income,
+                               population = population), 
+              type = "response")
+
+var <- mu + mu^2 / burg_nb$theta
+
+map(median_income, 
+    \(x) tibble(median_income = x, 
+                num_burglaries = 0:20, 
+                probability = dnbinom(0:20, 
+                                      mu = predict(burg_nb,
+                                                   newdata = tibble(median_income = x, population = population), type = "response"),
+                                      size = burg_nb$theta
+                                    )
+                )
+    ) |> 
+  bind_rows() |> 
+  ggplot(aes(x = num_burglaries, y = probability)) +
+  geom_col() +
+  facet_wrap(~median_income)
+```
+
