@@ -8,6 +8,8 @@ output: html_document
 ```{r}
 library(sf)
 library(tidyverse)
+library(repr)
+library(scales)
 ```
 
 
@@ -20,74 +22,48 @@ You've been provided three datasets for this project:
 
 ## Read in data
 ```{r}
-burglaries_2023 <- read_csv(file = "../data/burglaries_2023.csv")
-
-burglaries_2023 |> head(5)
-```
-
-```{r}
+burglaries <- read_csv(file = "../data/burglaries_2023.csv")
 census <- read_csv(file = "../data/census.csv")
-
-census |> head(5)
-```
-
-```{r}
 DC <- st_read("../data/DC")
-
-DC |> head(5)
 ```
+
 
 ## Perform a spatial join to determine the census tract in which each burglary occurred. Hint: You may want to make use of the [st_as_sf function](https://r-spatial.github.io/sf/reference/st_as_sf.html) in order to convert the burglaries data into an sf object.
 
-## Convert burglaries_2023 to a sf object
-```{r}
-burglaries_2023_sf <-burglaries_2023 |>
-  drop_na(longitude) |>
-  drop_na(latitude) |> 
-  st_as_sf(
-    coords = c("longitude", "latitude"),
-    crs = st_crs(DC),
-    remove = FALSE
-  )
 
-burglaries_2023_sf
+```{r}
+# Convert burglaries_2023 to a sf object
+burglaries <- burglaries |>
+    drop_na(longitude) |> # Drop rows where longitude is na
+    drop_na(latitude) |> # Drop rows where latitude is na
+    st_as_sf( # Convert tibble to sf object
+        coords = c("longitude", "latitude"), # Use longitude and latitude columns
+        crs = st_crs(DC), # Use coordinate reference system from DC shapefile
+        remove = FALSE # Keep original coordinate columns
+    )
+
+burglaries |> head(1)
 ```
 
-## Join burglaries that are within census
-```{r}
-burglaries_census_geo_sf <- st_join(
-  x = burglaries_2023_sf,
-  y = DC,
-  join = st_within,
-  left = FALSE
-)
 
-burglaries_census_geo_sf
+```{r}
+# Merge census tibble and DC spacial-type-object
+census <- left_join(x = DC,
+                    y = census |> mutate(state = as.character(state)), # Convert state column from double to char
+                    by = join_by(STATEFP == state, COUNTYFP == county, TRACTCE == tract)) # Join on these columns
+
+census |> st_drop_geometry() |> head(1)
 ```
 
-## After performing the spatial join, merge in the census data. **Note:** Make sure that the final dataset contains all census tracts, even those with zero burglaries.
-```{r}
-burglaries_census_sf <- merge(
-  x = burglaries_census_geo_sf,
-  y = census,
-  by.x = c("STATEFP", "COUNTYFP", "TRACTCE"),
-  by.y = c(as.character("state"), "county", "tract"),
-  all = TRUE
-)
 
-burglaries_census_sf
-```
-
-## Replace incident numbers NaN with zero
 ```{r}
-burglaries_census_sf <- burglaries_census_sf |> 
-  mutate(incident_number = replace_na(incident_number, 0))
-```
+# Merge census with burglaries where census tract locations contain burglaries locations
+census_burglaries <- census |> 
+    st_join(y = burglaries,
+            join = st_contains, # Join where census contains burglaries locations
+            left = TRUE) # Keep census tracts where there are no burglaries
 
-## Verify 
-```{r}
-burglaries_census_sf |> 
-  filter(incident_number == 0)
+census_burglaries |> st_drop_geometry() |> head(1)
 ```
 
 
@@ -95,47 +71,146 @@ burglaries_census_sf |>
 
 Perform some exploratory analysis on your prepared dataset.
 
-Aggregate the data by census tract. **Warning:** each incident can appear multiple times if there are multiple victims, so be sure that you aren't double-counting any incidents. 
+## Aggregate the data by census tract. **Warning:** each incident can appear multiple times if there are multiple victims, so be sure that you aren't double-counting any incidents. 
 
-## Get the count of unique census tracts
+
 ```{r}
-burglaries_census_sf |> 
+# Get the count of unique census tracts
+census_burglaries |> 
   distinct(TRACTCE) |> 
   count()
 ```
 
-## Get count of unique incidences by census tract. Reconcile number of census tracts.
+
 ```{r}
-incidents_per_tract <- burglaries_census_sf |> 
-    group_by(TRACTCE) |> 
-    distinct(incident_number) |>
-    count(sort = TRUE, name = "INCIDENTS")
+# Get the count of unique incidences by census tract. Reconcile number of census tracts.
+incidents_per_tract <- census_burglaries |> 
+    group_by(TRACTCE) |> # Group by census tracts
+    summarize(INCIDENTS_PER_TRACT = n_distinct(incident_number, na.rm = TRUE)) |> # Count unique incident numbers per tract (na is 0)
+    arrange(desc(INCIDENTS_PER_TRACT)) |>  # Sort by incidents per tract descending
+    st_drop_geometry() # Drop geometry
 
 incidents_per_tract
 ```
 
-## Which census tract had the highest number of burglaries?
 
 ```{r}
-incidents_per_tract |> 
-    head(n = 1)
+# Plot incidents per census tract
+burglaries_per_tract_col_plot <- incidents_per_tract |> 
+    ggplot(aes(x = INCIDENTS_PER_TRACT, y = TRACTCE)) + # Set x and y
+    geom_col(show.legend = FALSE) + # Use geom_col not geom_bar
+    labs(title = "Burglaries Per Census Tract", # Set title label
+         x = "Number of Burglaries", # Set x-axis label
+         y = "Census Tract") + # Set y-axis label
+    scale_x_continuous(expand = c(0, 0), n.breaks = 20) + # Remove margins and set ticks for x-axis
+    theme(text = element_text(size = 5)) # Set label text size
+
+burglaries_per_tract_col_plot
 ```
 
-## Which census tract had the highest number of burglaries per 1000 residents?
+
 ```{r}
-burglaries_census_sf |> 
-    mutate(KPOP = population / 1000, .after = population) |> 
-    group_by(TRACTCE) |> 
-    distinct(KPOP) |> 
-    merge(incidents_per_tract, by = "TRACTCE") |> 
-    filter(KPOP > 0) |> 
-    mutate(INC_PER_KPOP = INCIDENTS / KPOP) |> 
+# Save the plot
+ggsave(
+    "../plots/burglaries_per_tract_col_plot.png", # Set path
+    plot = burglaries_per_tract_col_plot, # Select plot
+    width = 4, # Set width
+    height = 10, # Set height
+    dpi = 300 # Set resolution
+)
+```
+
+
+## Which census tract had the highest number of burglaries?
+
+
+```{r}
+incidents_per_tract |> head(1)
+```
+
+
+## Which census tract had the highest number of burglaries per 1000 residents?
+
+
+```{r}
+# Merge INCIDENTS back to census_burglaries
+census_burglaries <- census_burglaries |> 
+    left_join(incidents_per_tract)
+
+census_burglaries |> st_drop_geometry() |> head(1)
+```
+
+
+```{r}
+census_burglaries |> 
+    select(population) |> 
+    arrange(population)
+```
+
+
+
+```{r}
+# Create columns for population in thousands and incidents per population in thousands
+census_burglaries <- census_burglaries |> 
+    mutate(KPOP = if_else(population != 0, population / 1000, 0), .after = population) |> # Calculate population in thousands
+    mutate(INC_PER_KPOP = if_else(KPOP != 0, INCIDENTS_PER_TRACT / KPOP, 0), .after = INCIDENTS_PER_TRACT) # Calculate incidents per thousand
+
+census_burglaries |>
+    select(INC_PER_KPOP) |> 
     arrange(desc(INC_PER_KPOP)) |> 
+    st_drop_geometry() |> 
     head(1)
 ```
 
 
-We're interested in the relationship between median income and number of aggravated burglaries, so examine those variables on their own and together to see what you can find. You may want to perform additional calculations, create plots, etc.
+```{r}
+# Create plot
+burglaries_by_kpop_per_tract_col_plot <- census_burglaries |> 
+    distinct(TRACTCE, .keep_all = TRUE) |> # Keep unique census tracts
+    ggplot(aes(x = INC_PER_KPOP, y = TRACTCE, fill = KPOP)) + # Set x and y
+    geom_col() + # Use geom_col not geom_bar
+    labs(title = "Burblaries Per Census Tract", # Set title label
+         subtitle = "Population in Thousands", # Set subtitle label
+         x = "Burglaries", # Set x-axis label
+         y = "Census Tract", # Set y-axis label
+         fill = "Population / K") + # Set legend label
+    scale_x_continuous(expand = c(0, 0), n.breaks = 15) + # Remove margins and set ticks for x-axis
+    theme(text = element_text(size = 5))# Set label text size
+
+burglaries_by_kpop_per_tract_col_plot
+```
+
+
+```{r}
+# Save the plot
+ggsave(
+    "../plots/burglaries_by_kpop_per_tract_col_plot.png", # Set path
+    plot = burglaries_by_kpop_per_tract_col_plot, # Select plot
+    width = 3, # Set width
+    height = 10, # Set height
+    dpi = 300 # Set resolution
+)
+```
+
+
+## We're interested in the relationship between median income and number of aggravated burglaries, so examine those variables on their own and together to see what you can find. You may want to perform additional calculations, create plots, etc.
+
+```{r}
+# Merge INCIDENTS and INC_PER_KPOP back to burglaries_census_sf
+burglaries_census_sf <- burglaries_census_sf |> 
+    merge(incidents_per_tract)
+
+burglaries_census_sf |> 
+    head(1)
+```
+
+```{r}
+burglaries_census_sf |> 
+    filter(median_income > 0) |> 
+    ggplot(aes(x = median_income, y = INCIDENTS)) +
+    geom_point()
+```
+
 
 ### Part 3: Statistical Modeling
 
