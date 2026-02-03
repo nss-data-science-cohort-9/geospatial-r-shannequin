@@ -12,27 +12,22 @@ library(repr)
 library(scales)
 ```
 
-
 # Part 1: Data Preparation
 
-You've been provided three datasets for this project:
-* burglaries_2023.csv: Contains data on the aggravated burglary incidents in Davidson County. This was obtained from https://data.nashville.gov/Police/Metro-Nashville-Police-Department-Incidents/2u6v-ujjs.
-* census.csv: Census tract level data on population and median income. This was obtained from the US Census American Community Survey.
-* DC: A shapefile containing Davidson County census tracts
+You've been provided three datasets for this project: \* burglaries_2023.csv: Contains data on the aggravated burglary incidents in Davidson County. This was obtained from <https://data.nashville.gov/Police/Metro-Nashville-Police-Department-Incidents/2u6v-ujjs>. \* census.csv: Census tract level data on population and median income. This was obtained from the US Census American Community Survey. \* DC: A shapefile containing Davidson County census tracts
 
 ## Read in data
+
 ```{r}
 burglaries <- read_csv(file = "../data/burglaries_2023.csv")
 census <- read_csv(file = "../data/census.csv")
 DC <- st_read("../data/DC")
 ```
 
-
 ## Perform a spatial join to determine the census tract in which each burglary occurred. Hint: You may want to make use of the [st_as_sf function](https://r-spatial.github.io/sf/reference/st_as_sf.html) in order to convert the burglaries data into an sf object.
 
-
 ```{r}
-# Convert burglaries_2023 to a sf object
+# Convert burglaries to a sf object
 burglaries <- burglaries |>
     drop_na(longitude) |> # Drop rows where longitude is na
     drop_na(latitude) |> # Drop rows where latitude is na
@@ -45,7 +40,6 @@ burglaries <- burglaries |>
 burglaries |> head(1)
 ```
 
-
 ```{r}
 # Merge census tibble and DC spacial-type-object
 census <- left_join(x = DC,
@@ -54,7 +48,6 @@ census <- left_join(x = DC,
 
 census |> st_drop_geometry() |> head(1)
 ```
-
 
 ```{r}
 # Merge census with burglaries where census tract locations contain burglaries locations
@@ -66,13 +59,11 @@ census_burglaries <- census |>
 census_burglaries |> st_drop_geometry() |> head(1)
 ```
 
-
 # Part 2: Exploratory Analysis
 
 Perform some exploratory analysis on your prepared dataset.
 
-## Aggregate the data by census tract. **Warning:** each incident can appear multiple times if there are multiple victims, so be sure that you aren't double-counting any incidents. 
-
+## Aggregate the data by census tract. **Warning:** each incident can appear multiple times if there are multiple victims, so be sure that you aren't double-counting any incidents.
 
 ```{r}
 # Get the count of unique census tracts
@@ -80,7 +71,6 @@ census_burglaries |>
   distinct(TRACTCE) |> 
   count()
 ```
-
 
 ```{r}
 # Get the count of unique incidences by census tract. Reconcile number of census tracts.
@@ -92,7 +82,6 @@ incidents_per_tract <- census_burglaries |>
 
 incidents_per_tract
 ```
-
 
 ```{r}
 # Plot incidents per census tract
@@ -108,7 +97,6 @@ burglaries_per_tract_col_plot <- incidents_per_tract |>
 burglaries_per_tract_col_plot
 ```
 
-
 ```{r}
 # Save the plot
 ggsave(
@@ -120,17 +108,13 @@ ggsave(
 )
 ```
 
-
 ## Which census tract had the highest number of burglaries?
-
 
 ```{r}
 incidents_per_tract |> head(1)
 ```
 
-
 ## Which census tract had the highest number of burglaries per 1000 residents?
-
 
 ```{r}
 # Merge INCIDENTS back to census_burglaries
@@ -140,14 +124,11 @@ census_burglaries <- census_burglaries |>
 census_burglaries |> st_drop_geometry() |> head(1)
 ```
 
-
 ```{r}
 census_burglaries |> 
     select(population) |> 
     arrange(population)
 ```
-
-
 
 ```{r}
 # Create columns for population in thousands and incidents per population in thousands
@@ -162,14 +143,13 @@ census_burglaries |>
     head(1)
 ```
 
-
 ```{r}
 # Create plot
 burglaries_by_kpop_per_tract_col_plot <- census_burglaries |> 
     distinct(TRACTCE, .keep_all = TRUE) |> # Keep unique census tracts
     ggplot(aes(x = INC_PER_KPOP, y = TRACTCE, fill = KPOP)) + # Set x and y
     geom_col() + # Use geom_col not geom_bar
-    labs(title = "Burblaries Per Census Tract", # Set title label
+    labs(title = "Burglaries Per Census Tract", # Set title label
          subtitle = "Population in Thousands", # Set subtitle label
          x = "Burglaries", # Set x-axis label
          y = "Census Tract", # Set y-axis label
@@ -179,7 +159,6 @@ burglaries_by_kpop_per_tract_col_plot <- census_burglaries |>
 
 burglaries_by_kpop_per_tract_col_plot
 ```
-
 
 ```{r}
 # Save the plot
@@ -192,23 +171,66 @@ ggsave(
 )
 ```
 
+```{r}
+# Create plot
+burglaries_by_kpop_point_plot <- census_burglaries |> 
+    distinct(TRACTCE, .keep_all = TRUE) |> # Keep unique census tracts
+    ggplot(aes(x = INC_PER_KPOP, y = KPOP)) + # Set x and y
+    geom_point(alpha = 0.5) + # Use point plot
+    labs(title = "Burglaries by Population", # Set title label
+         subtitle = "Population in Thousands", # Set subtitle label
+         x = "Burglaries", # Set x-axis label
+         y = "Population / K") # Set y-axis label
+
+burglaries_by_kpop_point_plot
+```
+
+```{r}
+# Save the plot
+ggsave(
+    "../plots/burglaries_by_kpop_point_plot.png", # Set path
+    plot = burglaries_by_kpop_point_plot, # Select plot
+    width = 5, # Set width
+    height = 4, # Set height
+    dpi = 300 # Set resolution
+)
+```
 
 ## We're interested in the relationship between median income and number of aggravated burglaries, so examine those variables on their own and together to see what you can find. You may want to perform additional calculations, create plots, etc.
 
 ```{r}
-# Merge INCIDENTS and INC_PER_KPOP back to burglaries_census_sf
-burglaries_census_sf <- burglaries_census_sf |> 
-    merge(incidents_per_tract)
+# Convert negative income to zero
+census_burglaries <- census_burglaries |> 
+    mutate(median_income = case_when(median_income < 0 ~ 0, .default = median_income))
 
-burglaries_census_sf |> 
-    head(1)
+census_burglaries |> st_drop_geometry() |> head(1)
 ```
 
 ```{r}
-burglaries_census_sf |> 
-    filter(median_income > 0) |> 
-    ggplot(aes(x = median_income, y = INCIDENTS)) +
-    geom_point()
+# Create plot
+burglaries_by_med_income_point_plot <- census_burglaries |> 
+    distinct(TRACTCE, .keep_all = TRUE) |>  # Keep unique census tracts
+    ggplot(aes(x = INCIDENTS_PER_TRACT, y = median_income, color = KPOP)) +  # Set x and y
+    geom_point() + # Use point plot
+    labs(title = "Burglaries by Median Income", # Set title label
+         subtitle = "Population in Thousands", # Set subtitle label
+         x = "Burglaries", # Set x-axis label
+         y = "Median Income", # Set y-axis label
+         color = "Population / K") # Set fill label
+
+burglaries_by_med_income_point_plot
+```
+
+
+```{r}
+# Save the plot
+ggsave(
+    "../plots/burglaries_by_med_income_point_plot.png", # Set path
+    plot = burglaries_by_med_income_point_plot, # Select plot
+    width = 5, # Set width
+    height = 4, # Set height
+    dpi = 300 # Set resolution
+)
 ```
 
 
@@ -216,11 +238,8 @@ burglaries_census_sf |>
 
 Fit a Poisson regression model with target variable the rate of burglaries per census tract and with predictor the median income. Offset using the log of the population so that we are looking at the rate of burglaries per population instead of the number of burglaries. How can you interpret the meaning of the output? How do the estimates from the model compare to the observed data?
 
-Additional Resources for Generalized Linear Models:
-* [Generalized Linear Models in R](https://app.datacamp.com/learn/courses/generalized-linear-models-in-r), a DataCamp course
-* [Beyond Multiple Linear Regression, Chapter 4](https://bookdown.org/roback/bookdown-BeyondMLR/ch-poissonreg.html)
+Additional Resources for Generalized Linear Models: \* [Generalized Linear Models in R](https://app.datacamp.com/learn/courses/generalized-linear-models-in-r), a DataCamp course \* [Beyond Multiple Linear Regression, Chapter 4](https://bookdown.org/roback/bookdown-BeyondMLR/ch-poissonreg.html)
 
 ### Bonus: APIs in R
 
-The data that you used for this project can be obtained through [the Nashville Open Data Portal](https://datanashvillegov-nashville.hub.arcgis.com/datasets/d747436243e9439e968fce056545016a_0/explore?location=36.185326%2C-86.784950%2C9.92) and through the [US Census 2020 American Community Survey API](https://www.census.gov/data/developers/data-sets/acs-5year.html). Utilize these APIs to retrieve the data used in this project (and any other data that you want to incorporate into your analysis). Hints: First, make sure to check out the [API Docs](https://datanashvillegov-nashville.hub.arcgis.com/datasets/d747436243e9439e968fce056545016a_0/api) for the Nashville Open Data API. When using the Census API, population, B01001_001E, is contained in the detailed tables and median income, S1901_C01_012E, is contained in the subject tables. Tennessee's FIPS code is 47 and Davidson County's FIPS code is 37. 
-
+The data that you used for this project can be obtained through [the Nashville Open Data Portal](https://datanashvillegov-nashville.hub.arcgis.com/datasets/d747436243e9439e968fce056545016a_0/explore?location=36.185326%2C-86.784950%2C9.92) and through the [US Census 2020 American Community Survey API](https://www.census.gov/data/developers/data-sets/acs-5year.html). Utilize these APIs to retrieve the data used in this project (and any other data that you want to incorporate into your analysis). Hints: First, make sure to check out the [API Docs](https://datanashvillegov-nashville.hub.arcgis.com/datasets/d747436243e9439e968fce056545016a_0/api) for the Nashville Open Data API. When using the Census API, population, B01001_001E, is contained in the detailed tables and median income, S1901_C01_012E, is contained in the subject tables. Tennessee's FIPS code is 47 and Davidson County's FIPS code is 37.
